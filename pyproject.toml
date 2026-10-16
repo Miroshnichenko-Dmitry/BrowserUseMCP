@@ -1,0 +1,48 @@
+[project]
+name = "browser-use-mcp"
+version = "1.1.0"
+description = "MCP server that runs browser-use agents as long-running, observable tasks"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # Pinned to the versions verified against this codebase.
+    # browser-use pins its own transitive deps exactly, so builds stay reproducible
+    # even before uv.lock is generated. Run `uv lock` and commit uv.lock anyway.
+    "browser-use==0.13.11",
+    "fastmcp==4.1.0",
+    "pydantic-settings==2.15.0",
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+browser-mcp = "browser_mcp.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/browser_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "RUF", "SIM"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # allow Cyrillic in strings/comments
+    "ASYNC109",  # explicit `timeout` params are part of our API on purpose
+]

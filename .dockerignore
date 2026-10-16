@@ -1,0 +1,15 @@
+.git
+.venv
+.idea
+.vscode
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.env
+.env.*
+!.env.example
+agent.py
+agent_v0.2.py
+*.gif
+artifacts/
