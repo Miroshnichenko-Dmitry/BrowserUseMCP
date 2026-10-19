@@ -52,9 +52,7 @@ RUN apt-get update \
 
 ARG APP_UID=10001
 RUN groupadd --system --gid ${APP_UID} app \
- && useradd --system --uid ${APP_UID} --gid app --create-home --home-dir /home/app app \
- && mkdir -p /data/artifacts \
- && chown -R app:app /data
+ && useradd --system --uid ${APP_UID} --gid app --create-home --home-dir /home/app app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
@@ -82,5 +80,5 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["browser-mcp"]
 
 LABEL org.opencontainers.image.title="browser-use-mcp" \
-      org.opencontainers.image.description="MCP server for browser control: low-level tools and a browser-use agent" \
-      org.opencontainers.image.version="2.0.0"
+      org.opencontainers.image.description="MCP server for browser control: one browser, one agent at a time" \
+      org.opencontainers.image.version="3.0.0"

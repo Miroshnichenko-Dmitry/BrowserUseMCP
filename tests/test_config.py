@@ -1,19 +1,20 @@
 import pytest
 from pydantic import ValidationError
 
-from browser_mcp.config import LLMProvider, Settings
+from browser_mcp.config import Settings
 
 
 def make(**env) -> Settings:
     return Settings(_env_file=None, **env)
 
 
-def test_defaults_keep_current_local_model():
+def test_defaults_for_one_agent_at_a_time():
     s = make()
-    assert s.llm_provider is LLMProvider.OLLAMA
-    assert s.llm_model == "qwen3.5:4b"
-    assert s.effective_llm_base_url == "http://localhost:11434"
-    assert s.ollama_num_ctx >= 16384
+    assert s.browser_headless is True
+    assert s.browser_handover_idle_seconds == 30
+    assert s.browser_busy_wait_seconds == 20
+    assert s.browser_session_max_seconds == 1800
+    assert s.token_map == {}
 
 
 def test_csv_domains(monkeypatch):
@@ -22,58 +23,33 @@ def test_csv_domains(monkeypatch):
     assert s.browser_allowed_domains == ["*.wikipedia.org", "example.com"]
 
 
-def test_cloud_provider_requires_key():
+def test_agent_tokens_from_env(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKENS", "pix-1:" + "a" * 20 + ", pix-2:" + "b" * 20)
+    monkeypatch.setenv("AUTH_TOKEN", "s" * 20)
+    s = Settings(_env_file=None)
+    assert s.token_map == {"a" * 20: "pix-1", "b" * 20: "pix-2", "s" * 20: None}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "pix-1",  # no token
+        "pix-1:short",  # too short
+        f"pix 1:{'a' * 20}",  # bad name
+        f"pix-1:{'a' * 20},pix-1:{'b' * 20}",  # duplicate name
+        f"pix-1:{'a' * 20},pix-2:{'a' * 20}",  # duplicate token
+    ],
+)
+def test_bad_agent_tokens(value):
     with pytest.raises(ValidationError):
-        make(llm_provider="openai", llm_model="gpt-5-mini")
+        make(auth_tokens=value)
 
 
-def test_openai_compatible_requires_base_url():
+def test_shared_token_must_be_long_and_differ_from_agent_tokens():
     with pytest.raises(ValidationError):
-        make(llm_provider="openai_compatible", llm_model="qwen3.5:32b")
-    s = make(llm_provider="openai_compatible", llm_model="m", llm_base_url="http://vllm:8000/v1/")
-    assert s.effective_llm_base_url == "http://vllm:8000/v1"
-
-
-def test_vision_auto_and_bool():
-    assert make(agent_use_vision="auto").agent_use_vision == "auto"
-    assert make(agent_use_vision="false").agent_use_vision is False
-
-
-def test_step_limits_consistent():
+        make(auth_token="short")
     with pytest.raises(ValidationError):
-        make(agent_max_steps=200, agent_max_steps_limit=100)
-
-
-def test_endpoints_csv_and_defaults():
-    assert make().endpoints == ["browser", "agent"]
-    s = make(endpoints="Agent, browser,agent")
-    assert s.endpoints == ["agent", "browser"]
-    with pytest.raises(ValidationError):
-        make(endpoints="browser,shell")
-    with pytest.raises(ValidationError):
-        make(endpoints="")
-
-
-def test_llm_settings_ignored_without_agent():
-    # A cloud provider without a key is only an error when the agent endpoint is enabled.
-    s = make(endpoints="browser", llm_provider="openai", llm_model="gpt-5-mini")
-    assert not s.agent_enabled and s.browser_enabled
-
-
-def test_agent_concurrency_fits_in_browser_pool():
-    with pytest.raises(ValidationError):
-        make(max_browsers=1, max_concurrent_tasks=2)
-
-
-def test_stdio_endpoint_must_be_enabled():
-    with pytest.raises(ValidationError):
-        make(transport="stdio", endpoints="agent", stdio_endpoint="browser")
-
-
-def test_per_endpoint_token_overrides_global():
-    s = make(auth_token="g" * 20, agent_auth_token="a" * 20)
-    assert s.token_for("browser").get_secret_value() == "g" * 20
-    assert s.token_for("agent").get_secret_value() == "a" * 20
+        make(auth_token="a" * 20, auth_tokens=f"pix-1:{'a' * 20}")
 
 
 def test_window_size():
@@ -84,9 +60,18 @@ def test_window_size():
 
 
 def test_browser_proxy_goes_into_profile(tmp_path):
-    from browser_mcp.browsers import build_profile
+    from browser_mcp.driver import build_profile
 
     s = make(browser_proxy="http://proxy:3128", browser_proxy_bypass="localhost")
     proxy = build_profile(s, tmp_path).proxy
     assert proxy.server == "http://proxy:3128" and proxy.bypass == "localhost"
     assert build_profile(make(), tmp_path).proxy is None
+
+
+def test_server_policy_goes_into_profile(tmp_path):
+    from browser_mcp.driver import build_profile
+
+    s = make(browser_allowed_domains="example.com", browser_block_ip_addresses="true")
+    profile = build_profile(s, tmp_path)
+    assert list(profile.allowed_domains) == ["example.com"]
+    assert profile.block_ip_addresses and profile.headless and profile.keep_alive

@@ -1,9 +1,7 @@
-# Default: the MCP server in Docker talks to Ollama running on the host (Windows/macOS/Linux).
 #   docker compose up -d --build
 #
-# Ollama inside Docker as well (optional):
-#   LLM_BASE_URL=http://ollama:11434 docker compose --profile ollama up -d --build
-#   docker compose exec ollama ollama pull qwen3.5:4b
+# One browser, one agent at a time. The port is published on 127.0.0.1 only: put a TLS reverse
+# proxy in front of it and set AUTH_TOKEN / AUTH_TOKENS before letting other machines in.
 
 name: browser-use-mcp
 
@@ -16,7 +14,7 @@ services:
         # Only if the build cannot reach PyPI / Debian directly (see BUILD_PROXY in .env.example).
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
-    image: browser-use-mcp:2.0.0
+    image: browser-use-mcp:3.0.0
     restart: unless-stopped
     env_file:
       - path: .env
@@ -26,22 +24,14 @@ services:
       TRANSPORT: http
       HOST: 0.0.0.0
       PORT: "8000"
-      # Taken from your shell / .env if set, otherwise these defaults.
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
-      ARTIFACTS_DIR: ${ARTIFACTS_DIR:-/data/artifacts}
     ports:
-      # Published on localhost only. Set AUTH_TOKEN before exposing it any wider.
       - "127.0.0.1:${PORT:-8000}:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # needed on Linux; harmless on Docker Desktop
-    volumes:
-      - artifacts:/data/artifacts
     shm_size: "1gb"
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    stop_grace_period: 40s      # > TASK_CANCEL_GRACE_SECONDS so running agents stop cleanly
+    stop_grace_period: 40s      # the browser gets up to 2 x 20s to finish its call and close
     deploy:
       resources:
         limits:
@@ -52,29 +42,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  ollama:
-    profiles: ["ollama"]
-    image: ollama/ollama:0.40.5
-    restart: unless-stopped
-    volumes:
-      - ollama:/root/.ollama
-    environment:
-      OLLAMA_KEEP_ALIVE: 30m
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    # NVIDIA GPU (requires NVIDIA Container Toolkit / WSL2 GPU support):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-
-volumes:
-  artifacts:
-  ollama:

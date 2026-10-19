@@ -13,7 +13,7 @@ def main() -> None:
 
     from pydantic import ValidationError
 
-    from .config import ENDPOINT_PATHS, get_settings
+    from .config import MCP_PATH, get_settings
 
     try:
         settings = get_settings()
@@ -29,34 +29,24 @@ def main() -> None:
     components = build_components(settings)
 
     if settings.transport == "stdio":
-        # stdio carries exactly one MCP server.
-        logger.info("starting server", extra={"transport": "stdio", "endpoint": settings.stdio_endpoint})
-        components.servers[settings.stdio_endpoint].run(transport="stdio", show_banner=False)
+        logger.info("starting server", extra={"transport": "stdio"})
+        components.server.run(transport="stdio", show_banner=False)
         return
 
-    if not settings.is_loopback:
-        for name in components.servers:
-            if settings.token_for(name) is None:
-                logger.warning(
-                    "Listening on %s without a token for %s. Anyone who can reach the port controls the "
-                    "browser. Bind the published port to 127.0.0.1 or set AUTH_TOKEN.",
-                    settings.host,
-                    ENDPOINT_PATHS[name],
-                )
+    if not settings.is_loopback and not settings.token_map:
+        logger.warning(
+            "Listening on %s without AUTH_TOKEN / AUTH_TOKENS. Anyone who can reach the port controls "
+            "the browser. Bind the published port to 127.0.0.1 or set a token.",
+            settings.host,
+        )
 
     logger.info(
         "starting server",
         extra={
             "transport": "http",
-            "endpoints": ", ".join(
-                f"http://{settings.host}:{settings.port}{ENDPOINT_PATHS[n]}" for n in components.servers
-            ),
-            "max_browsers": settings.max_browsers,
-            **(
-                {"llm": f"{settings.llm_provider.value}:{settings.llm_model}"}
-                if settings.agent_enabled
-                else {}
-            ),
+            "endpoint": f"http://{settings.host}:{settings.port}{MCP_PATH}",
+            "handover_idle_seconds": settings.browser_handover_idle_seconds,
+            "agent_tokens": len(settings.auth_tokens),
         },
     )
 

@@ -1,4 +1,4 @@
-"""browser-use backed `Driver`: one BrowserSession per client session, actions via browser-use `Tools`.
+"""browser-use backed `Driver`: one BrowserSession, actions via browser-use `Tools`.
 
 Actions go through the same action registry the agent uses, so clicks, typing, scrolling and
 navigation get the library's error handling and domain policy checks for free.
@@ -15,21 +15,20 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .browsers import build_profile
 from .config import Settings
 from .sessions import ActionOutcome, PageState
 
 if TYPE_CHECKING:
     from browser_use import BrowserSession, Tools
+    from browser_use.browser import BrowserProfile
     from browser_use.browser.views import BrowserStateSummary
 
 logger = logging.getLogger(__name__)
 
 
 class BrowserUseDriver:
-    def __init__(self, settings: Settings, session_id: str, allowed_domains: list[str] | None):
+    def __init__(self, settings: Settings, session_id: str):
         self._settings = settings
-        self._allowed_domains = allowed_domains
         self._workdir = Path(tempfile.mkdtemp(prefix=f"browser-session-{session_id[:8]}-"))
         self._session: BrowserSession | None = None
         self._tools: Tools | None = None
@@ -38,7 +37,7 @@ class BrowserUseDriver:
     async def start(self) -> None:
         from browser_use import BrowserSession, Tools
 
-        profile = build_profile(self._settings, self._workdir, self._allowed_domains, keep_alive=True)
+        profile = build_profile(self._settings, self._workdir)
         self._session = BrowserSession(browser_profile=profile)
         await self._session.start()
         self._tools = Tools()
@@ -111,6 +110,30 @@ class BrowserUseDriver:
 
         content, _ = await extract_clean_markdown(browser_session=self._browser, extract_links=True)
         return content
+
+
+def build_profile(settings: Settings, workdir: Path) -> BrowserProfile:
+    """Fresh, isolated profile under `workdir` with the server-wide navigation policy applied."""
+    from browser_use.browser import BrowserProfile
+    from browser_use.browser.profile import ProxySettings
+
+    proxy = None
+    if settings.browser_proxy:
+        proxy = ProxySettings(server=settings.browser_proxy, bypass=settings.browser_proxy_bypass)
+
+    return BrowserProfile(
+        proxy=proxy,
+        headless=settings.browser_headless,
+        window_size=settings.window_size,
+        executable_path=settings.browser_executable_path,
+        user_data_dir=workdir / "profile",
+        downloads_path=workdir / "downloads",
+        allowed_domains=settings.browser_allowed_domains,
+        prohibited_domains=settings.browser_prohibited_domains,
+        block_ip_addresses=settings.browser_block_ip_addresses,
+        enable_default_extensions=settings.browser_enable_extensions,
+        keep_alive=True,
+    )
 
 
 def _format_state(summary: BrowserStateSummary, focus_target: str | None, max_chars: int) -> str:

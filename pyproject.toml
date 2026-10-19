@@ -1,7 +1,7 @@
 [project]
 name = "browser-use-mcp"
-version = "2.0.0"
-description = "MCP server for browser control: low-level tools for the client model and a browser-use agent endpoint"
+version = "3.0.0"
+description = "MCP server for browser control: low-level browser-use tools for one agent at a time"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -10,7 +10,6 @@ dependencies = [
     "browser-use==0.13.11",
     "fastmcp==4.1.0",
     "pydantic-settings==2.15.0",
-    "httpx==0.28.1",
 ]
 
 [project.scripts]
@@ -18,6 +17,7 @@ browser-mcp = "browser_mcp.__main__:main"
 
 [dependency-groups]
 dev = [
+    "httpx==0.28.1",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",

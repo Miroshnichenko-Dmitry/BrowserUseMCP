@@ -6,16 +6,15 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ImageContent, TextContent
 
 from browser_mcp.browser_server import create_browser_server
-from browser_mcp.browsers import BrowserPool
 from browser_mcp.config import Settings
-from browser_mcp.sessions import SessionManager, SessionManagerConfig
+from browser_mcp.sessions import BrowserSlot, SlotConfig
 from conftest import FakeDriver
 
 
-def make_server(pool_size: int = 2, **overrides):
-    settings = Settings(_env_file=None, endpoints="browser", **overrides)
-    sessions = SessionManager(FakeDriver, BrowserPool(pool_size), SessionManagerConfig(open_wait=0.05))
-    return create_browser_server(settings, sessions), sessions
+def make_server(**overrides):
+    settings = Settings(_env_file=None, **overrides)
+    slot = BrowserSlot(FakeDriver, SlotConfig(busy_wait=0.05))
+    return create_browser_server(settings, slot), slot
 
 
 def text_of(result) -> str:
@@ -27,9 +26,7 @@ async def test_tools_are_listed_without_output_schema():
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
     assert set(tools) == {
-        "browser_open",
         "browser_close",
-        "browser_list_sessions",
         "browser_navigate",
         "browser_back",
         "browser_tab",
@@ -47,18 +44,20 @@ async def test_tools_are_listed_without_output_schema():
     assert all(t.output_schema is None for t in tools.values())
 
 
-async def test_first_action_opens_default_browser_and_returns_state():
-    mcp, sessions = make_server()
+async def test_first_action_opens_the_browser_and_returns_state():
+    mcp, slot = make_server()
     async with Client(mcp) as client:
         result = await client.call_tool("browser_navigate", {"url": "https://example.com"})
         again = await client.call_tool("browser_click", {"index": 1})
-        assert sessions.count == 1
+        assert slot.status()["state"] == "idle"
     assert result.structured_content is None
     body = text_of(result)
-    assert body.startswith("OK: navigate ok")
+    assert body.startswith("NOTE: a new browser was started for you")
+    assert "OK: navigate ok" in body
     assert "URL: https://example.com" in body and "[1]<button>" in body
-    assert text_of(again).startswith("OK: click ok")
-    assert sessions.count == 0  # closed on server shutdown
+    assert text_of(again).startswith("OK: click ok")  # the notice comes once
+    assert slot.status()["state"] == "free"  # closed on server shutdown
+    assert FakeDriver.instances[0].closed
     assert FakeDriver.instances[0].actions == [
         ("navigate", {"url": "https://example.com", "new_tab": False}),
         ("click", {"index": 1}),
@@ -68,6 +67,7 @@ async def test_first_action_opens_default_browser_and_returns_state():
 async def test_failed_action_still_returns_state():
     mcp, _ = make_server()
     async with Client(mcp) as client:
+        await client.call_tool("browser_snapshot", {})
         result = await client.call_tool("browser_click", {"index": 999})
     body = text_of(result)
     assert body.startswith("FAILED: Element index 999")
@@ -101,53 +101,34 @@ async def test_snapshot_with_screenshot_returns_image():
         with_image = await client.call_tool("browser_snapshot", {"screenshot": True})
     assert [type(c) for c in plain.content] == [TextContent]
     assert [type(c) for c in with_image.content] == [TextContent, ImageContent]
+    for result in (plain, with_image):  # real text, not a JSON-encoded list of strings
+        assert "\nPage:\n[1]<button>" in result.content[0].text
     assert with_image.content[1].mime_type == "image/jpeg"
 
 
 async def test_read_is_chunked():
     mcp, _ = make_server(browser_read_max_chars=1000)
     async with Client(mcp) as client:
+        await client.call_tool("browser_snapshot", {})
         result = await client.call_tool("browser_read", {"start": 3})
     body = text_of(result)
+    assert body.startswith("URL: ")
     assert "Chars 3-58 of 58" in body
     assert "more:" not in body
 
 
-async def test_open_extra_session_and_close():
-    mcp, sessions = make_server()
-    async with Client(mcp) as client:
-        opened = text_of(await client.call_tool("browser_open", {"url": "https://a.test"}))
-        session_id = opened.splitlines()[0].removeprefix("session_id: ")
-        listed = text_of(await client.call_tool("browser_list_sessions", {}))
-        assert session_id in listed and "yours" in listed
-        closed = text_of(await client.call_tool("browser_close", {"session_id": session_id}))
-        assert "Closed" in closed
-        with pytest.raises(ToolError, match="Unknown browser session"):
-            await client.call_tool("browser_snapshot", {"session_id": session_id})
-    assert sessions.count == 0
-
-
-async def test_close_default_session():
-    mcp, sessions = make_server()
+async def test_close_frees_the_browser():
+    mcp, slot = make_server()
     async with Client(mcp) as client:
         await client.call_tool("browser_navigate", {"url": "https://a.test"})
-        assert "Closed" in text_of(await client.call_tool("browser_close", {}))
-        assert "No such" in text_of(await client.call_tool("browser_close", {}))
-    assert sessions.count == 0
+        assert "Browser closed" in text_of(await client.call_tool("browser_close", {}))
+        assert slot.status()["state"] == "free"
+        assert "no open browser" in text_of(await client.call_tool("browser_close", {}))
+        again = text_of(await client.call_tool("browser_snapshot", {}))
+    assert again.startswith("NOTE: a new browser was started")
+    assert len(FakeDriver.instances) == 2 and FakeDriver.instances[0].closed
 
 
-async def test_busy_pool_is_a_tool_error():
-    mcp, _ = make_server(pool_size=1)
-    async with Client(mcp) as client:
-        await client.call_tool("browser_open", {})
-        with pytest.raises(ToolError, match="browsers are busy"):
-            await client.call_tool("browser_snapshot", {})
-
-
-async def test_domain_policy_cannot_be_widened():
-    mcp, _ = make_server(browser_allowed_domains="example.com")
-    async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="not permitted"):
-            await client.call_tool("browser_open", {"allowed_domains": ["evil.com"]})
-        await client.call_tool("browser_open", {"allowed_domains": ["example.com"]})
-    assert FakeDriver.instances[-1].allowed_domains == ["example.com"]
+async def test_instructions_mention_the_handover_limit():
+    mcp, _ = make_server(browser_handover_idle_seconds=45)
+    assert "inactive for 45s" in mcp.instructions
