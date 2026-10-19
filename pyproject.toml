@@ -1,13 +1,12 @@
 [project]
 name = "browser-use-mcp"
-version = "1.1.0"
-description = "MCP server that runs browser-use agents as long-running, observable tasks"
+version = "2.0.0"
+description = "MCP server for browser control: low-level tools for the client model and a browser-use agent endpoint"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     # Pinned to the versions verified against this codebase.
-    # browser-use pins its own transitive deps exactly, so builds stay reproducible
-    # even before uv.lock is generated. Run `uv lock` and commit uv.lock anyway.
+    # Transitive versions are locked in uv.lock; run `uv lock` after changing this list.
     "browser-use==0.13.11",
     "fastmcp==4.1.0",
     "pydantic-settings==2.15.0",

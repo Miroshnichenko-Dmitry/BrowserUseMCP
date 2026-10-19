@@ -1,11 +1,11 @@
-"""End-to-end over the MCP protocol with an in-memory client and a fake agent."""
+"""Agent endpoint over the MCP protocol with an in-memory client and a fake agent."""
 
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from browser_mcp.agent_server import create_agent_server
 from browser_mcp.config import Settings
-from browser_mcp.server import create_server
 from conftest import FakeRunner
 
 
@@ -15,7 +15,7 @@ def settings(**overrides) -> Settings:
 
 
 async def test_tools_are_listed():
-    mcp = create_server(settings(), FakeRunner())
+    mcp, _ = create_agent_server(settings(), FakeRunner())
     async with Client(mcp) as client:
         names = {t.name for t in await client.list_tools()}
     assert names == {
@@ -28,7 +28,7 @@ async def test_tools_are_listed():
 
 
 async def test_run_task_returns_final_result_when_fast():
-    mcp = create_server(settings(), FakeRunner(steps=2))
+    mcp, _ = create_agent_server(settings(), FakeRunner(steps=2))
     progress: list[float] = []
 
     async def on_progress(value, total, message):
@@ -43,7 +43,7 @@ async def test_run_task_returns_final_result_when_fast():
 
 
 async def test_long_task_requires_wait():
-    mcp = create_server(settings(), FakeRunner(steps=40, step_delay=0.02))
+    mcp, _ = create_agent_server(settings(), FakeRunner(steps=40, step_delay=0.02))
     async with Client(mcp) as client:
         args = {"task": "long one", "wait_seconds": 0.1}
         first = (await client.call_tool("browser_run_task", args)).structured_content
@@ -57,7 +57,7 @@ async def test_long_task_requires_wait():
 
 
 async def test_cancel_and_list():
-    mcp = create_server(settings(), FakeRunner(steps=500, step_delay=0.02))
+    mcp, _ = create_agent_server(settings(), FakeRunner(steps=500, step_delay=0.02))
     async with Client(mcp) as client:
         args = {"task": "slow", "wait_seconds": 0}
         started = (await client.call_tool("browser_run_task", args)).structured_content
@@ -71,14 +71,14 @@ async def test_cancel_and_list():
 
 
 async def test_unknown_task_is_tool_error():
-    mcp = create_server(settings(), FakeRunner())
+    mcp, _ = create_agent_server(settings(), FakeRunner())
     async with Client(mcp) as client:
         with pytest.raises(ToolError):
             await client.call_tool("browser_get_task", {"task_id": "missing"})
 
 
 async def test_domain_policy_cannot_be_widened():
-    mcp = create_server(settings(browser_allowed_domains="example.com"), FakeRunner())
+    mcp, _ = create_agent_server(settings(browser_allowed_domains="example.com"), FakeRunner())
     async with Client(mcp) as client:
         with pytest.raises(ToolError):
             await client.call_tool(

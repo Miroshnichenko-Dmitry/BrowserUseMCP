@@ -9,6 +9,11 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+Endpoint = Literal["browser", "agent"]
+
+# Fixed MCP URLs. Clients connect to whichever toolset they need.
+ENDPOINT_PATHS: dict[str, str] = {"browser": "/mcp/browser", "agent": "/mcp/agent"}
+
 
 class LLMProvider(StrEnum):
     OLLAMA = "ollama"
@@ -46,12 +51,24 @@ class Settings(BaseSettings):
     transport: Literal["http", "stdio"] = "http"
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
-    mcp_path: str = "/mcp"
+    endpoints: Annotated[list[Endpoint], NoDecode] = Field(
+        default_factory=lambda: ["browser", "agent"],
+        description="Enabled MCP endpoints: browser (/mcp/browser), agent (/mcp/agent).",
+    )
+    stdio_endpoint: Endpoint = Field(
+        default="browser", description="stdio carries a single server: which endpoint to expose."
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["text", "json"] = "text"
     auth_token: SecretStr | None = Field(
         default=None,
-        description="If set, clients must send `Authorization: Bearer <token>`.",
+        description="If set, clients must send `Authorization: Bearer <token>` (all endpoints).",
+    )
+    browser_auth_token: SecretStr | None = Field(
+        default=None, description="Overrides AUTH_TOKEN for /mcp/browser."
+    )
+    agent_auth_token: SecretStr | None = Field(
+        default=None, description="Overrides AUTH_TOKEN for /mcp/agent."
     )
 
     # ------------------------------------------------------------------- llm
@@ -83,8 +100,22 @@ class Settings(BaseSettings):
     agent_extend_system_message: str | None = None
 
     # --------------------------------------------------------------- browser
-    browser_headless: bool = True
+    max_browsers: int = Field(
+        default=2, ge=1, le=32, description="Chromium instances alive at once, shared by both endpoints."
+    )
+    browser_headless: bool = False
+    browser_window_size: str = Field(
+        default="1280x900",
+        pattern=r"^\d{3,4}x\d{3,4}$",
+        description="Viewport (headless) or window size. Defaults to the host screen otherwise, "
+        "which makes screenshots and click coordinates huge on wide monitors.",
+    )
     browser_executable_path: str | None = None
+    browser_proxy: str | None = Field(
+        default=None,
+        description="Proxy for Chromium traffic, e.g. http://http.docker.internal:3128 or socks5://host:1080.",
+    )
+    browser_proxy_bypass: str | None = Field(default=None, description="Comma-separated hosts to bypass.")
     browser_allowed_domains: CsvList = None
     browser_prohibited_domains: CsvList = None
     browser_block_ip_addresses: bool = False
@@ -92,6 +123,21 @@ class Settings(BaseSettings):
         default=False,
         description="uBlock/cookie extensions; downloaded at runtime, so off by default.",
     )
+
+    # ------------------------------------------- browser endpoint (sessions)
+    browser_session_idle_seconds: float = Field(
+        default=600, gt=0, description="Close a client's browser after this much inactivity."
+    )
+    browser_max_sessions_per_client: int = Field(default=3, ge=1, le=32)
+    browser_open_wait_seconds: float = Field(
+        default=15, ge=0, description="How long opening a session waits for a free browser."
+    )
+    browser_action_timeout_seconds: float = Field(default=60, gt=0)
+    browser_state_max_chars: int = Field(
+        default=12000, ge=1000, description="Cap on the page state returned after every action."
+    )
+    browser_read_max_chars: int = Field(default=30000, ge=1000)
+    browser_screenshot_quality: int = Field(default=70, ge=10, le=100, description="JPEG quality.")
 
     # ----------------------------------------------------------------- tasks
     max_concurrent_tasks: int = Field(default=1, ge=1, le=32)
@@ -119,23 +165,49 @@ class Settings(BaseSettings):
     def _parse_csv(cls, value: object) -> list[str] | None:
         return _split_csv(value)
 
-    @field_validator("mcp_path")
+    @field_validator("endpoints", mode="before")
     @classmethod
-    def _normalize_path(cls, value: str) -> str:
-        return "/" + value.strip("/")
+    def _parse_endpoints(cls, value: object) -> list[str]:
+        items = _split_csv(value) or []
+        return list(dict.fromkeys(item.lower() for item in items))  # dedupe, keep order
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Settings:
+        if not self.endpoints:
+            raise ValueError("ENDPOINTS must enable at least one of: browser, agent")
+        if self.transport == "stdio" and self.stdio_endpoint not in self.endpoints:
+            raise ValueError(f"STDIO_ENDPOINT={self.stdio_endpoint} is not in ENDPOINTS")
+        if not self.agent_enabled:
+            return self  # LLM and agent settings are irrelevant without the agent endpoint
         if self.agent_max_steps > self.agent_max_steps_limit:
             raise ValueError("AGENT_MAX_STEPS must be <= AGENT_MAX_STEPS_LIMIT")
         if self.wait_default_seconds > self.wait_max_seconds:
             raise ValueError("WAIT_DEFAULT_SECONDS must be <= WAIT_MAX_SECONDS")
+        if self.max_concurrent_tasks > self.max_browsers:
+            raise ValueError("MAX_CONCURRENT_TASKS must be <= MAX_BROWSERS")
         needs_key = {LLMProvider.OPENAI, LLMProvider.ANTHROPIC, LLMProvider.GOOGLE}
         if self.llm_provider in needs_key and self.llm_api_key is None:
             raise ValueError(f"LLM_API_KEY is required for LLM_PROVIDER={self.llm_provider.value}")
         if self.llm_provider is LLMProvider.OPENAI_COMPATIBLE and not self.llm_base_url:
             raise ValueError("LLM_BASE_URL is required for LLM_PROVIDER=openai_compatible")
         return self
+
+    @property
+    def agent_enabled(self) -> bool:
+        return "agent" in self.endpoints
+
+    @property
+    def browser_enabled(self) -> bool:
+        return "browser" in self.endpoints
+
+    def token_for(self, endpoint: Endpoint) -> SecretStr | None:
+        specific = self.browser_auth_token if endpoint == "browser" else self.agent_auth_token
+        return specific or self.auth_token
+
+    @property
+    def window_size(self) -> dict[str, int]:
+        width, height = self.browser_window_size.split("x")
+        return {"width": int(width), "height": int(height)}
 
     @property
     def is_loopback(self) -> bool:

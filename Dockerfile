@@ -82,5 +82,5 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["browser-mcp"]
 
 LABEL org.opencontainers.image.title="browser-use-mcp" \
-      org.opencontainers.image.description="MCP server running browser-use agents as background tasks" \
-      org.opencontainers.image.version="1.1.0"
+      org.opencontainers.image.description="MCP server for browser control: low-level tools and a browser-use agent" \
+      org.opencontainers.image.version="2.0.0"

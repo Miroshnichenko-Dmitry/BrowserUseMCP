@@ -12,7 +12,11 @@ services:
     build:
       context: .
       target: runtime
-    image: browser-use-mcp:1.1.0
+      args:
+        # Only if the build cannot reach PyPI / Debian directly (see BUILD_PROXY in .env.example).
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+    image: browser-use-mcp:2.0.0
     restart: unless-stopped
     env_file:
       - path: .env
@@ -51,7 +55,7 @@ services:
 
   ollama:
     profiles: ["ollama"]
-    image: ollama/ollama:0.12.6
+    image: ollama/ollama:0.40.5
     restart: unless-stopped
     volumes:
       - ollama:/root/.ollama

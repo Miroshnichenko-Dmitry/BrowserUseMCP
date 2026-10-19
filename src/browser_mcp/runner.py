@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .browsers import BrowserPool, build_profile
 from .config import Settings
 from .llm import build_llm
 from .models import TaskOutcome, TaskProgress
@@ -26,14 +27,14 @@ _IGNORED_URLS = {"", "about:blank", "chrome://newtab/"}
 class BrowserAgentRunner:
     """Creates an isolated browser + agent per task and tears both down afterwards."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, pool: BrowserPool):
         self._settings = settings
+        self._pool = pool
 
     async def __call__(
         self, task_id: str, spec: TaskSpec, report: ProgressCallback, stop_requested: asyncio.Event
     ) -> TaskOutcome:
         from browser_use import Agent
-        from browser_use.browser import BrowserProfile
 
         s = self._settings
         workdir = Path(tempfile.mkdtemp(prefix=f"browser-task-{task_id[:8]}-"))
@@ -42,17 +43,7 @@ class BrowserAgentRunner:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            profile = BrowserProfile(
-                headless=s.browser_headless,
-                executable_path=s.browser_executable_path,
-                user_data_dir=workdir / "profile",  # fresh, isolated profile per task
-                downloads_path=workdir / "downloads",
-                allowed_domains=spec.allowed_domains or s.browser_allowed_domains,
-                prohibited_domains=s.browser_prohibited_domains,
-                block_ip_addresses=s.browser_block_ip_addresses,
-                enable_default_extensions=s.browser_enable_extensions,
-                keep_alive=False,
-            )
+            profile = build_profile(s, workdir, spec.allowed_domains)
 
             async def should_stop() -> bool:
                 return stop_requested.is_set()
@@ -87,7 +78,9 @@ class BrowserAgentRunner:
                 except Exception:  # never let reporting break the agent loop
                     logger.debug("progress report failed", exc_info=True)
 
-            history = await agent.run(max_steps=spec.max_steps, on_step_end=on_step_end)
+            # Waits here while every browser is taken by other tasks or direct sessions.
+            async with self._pool.slot():
+                history = await agent.run(max_steps=spec.max_steps, on_step_end=on_step_end)
 
             artifacts: list[str] = []
             if artifacts_dir:

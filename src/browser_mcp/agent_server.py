@@ -1,4 +1,4 @@
-"""FastMCP server: tool definitions, health endpoints, lifespan."""
+"""Agent endpoint (/mcp/agent): natural-language tasks run by a browser-use Agent in the background."""
 
 # NOTE: no `from __future__ import annotations` here: FastMCP introspects real annotations.
 import logging
@@ -7,12 +7,12 @@ from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.lifespan import lifespan
 from pydantic import Field
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from . import __version__
+from .browsers import resolve_domains
 from .config import Settings
 from .llm import check_llm_ready
 from .models import TaskList, TaskStatus, TaskView
@@ -39,7 +39,9 @@ _RUN_ANNOTATIONS = {"readOnlyHint": False, "destructiveHint": False, "openWorldH
 _READ_ANNOTATIONS = {"readOnlyHint": True, "openWorldHint": False}
 
 
-def create_server(settings: Settings, runner: Runner) -> FastMCP:
+def create_agent_server(
+    settings: Settings, runner: Runner, auth: TokenVerifier | None = None
+) -> tuple[FastMCP, TaskManager]:
     manager = TaskManager(
         runner,
         TaskManagerConfig(
@@ -67,14 +69,8 @@ def create_server(settings: Settings, runner: Runner) -> FastMCP:
             logger.info("shutting down, stopping active tasks", extra={"active": manager.active_count})
             await manager.shutdown(timeout=settings.task_cancel_grace_seconds + 5)
 
-    auth = None
-    if settings.auth_token is not None:
-        from .auth import BearerTokenVerifier
-
-        auth = BearerTokenVerifier(settings.auth_token.get_secret_value())
-
     mcp = FastMCP(
-        name="browser-use-mcp",
+        name="browser-use-agent",
         instructions=INSTRUCTIONS,
         version=__version__,
         auth=auth,
@@ -97,16 +93,6 @@ def create_server(settings: Settings, runner: Runner) -> FastMCP:
             await ctx.report_progress(progress=p.step, total=p.max_steps, message=message)
 
         return await manager.wait(task_id, timeout=wait, on_update=on_update)
-
-    def resolve_domains(requested: list[str] | None) -> list[str] | None:
-        if not requested:
-            return None
-        allowed = settings.browser_allowed_domains
-        if allowed:
-            extra = [d for d in requested if d not in allowed]
-            if extra:
-                raise ToolError(f"Domains not permitted by server policy: {', '.join(extra)}")
-        return requested
 
     @mcp.tool(annotations=_RUN_ANNOTATIONS)
     async def browser_run_task(
@@ -137,14 +123,14 @@ def create_server(settings: Settings, runner: Runner) -> FastMCP:
         Returns a task snapshot. If `done` is false the task is still running:
         call browser_wait_task with the returned task_id until `done` is true.
         """
-        spec = TaskSpec(
-            task=task.strip(),
-            max_steps=max_steps or settings.agent_max_steps,
-            allowed_domains=resolve_domains(allowed_domains),
-        )
         try:
+            spec = TaskSpec(
+                task=task.strip(),
+                max_steps=max_steps or settings.agent_max_steps,
+                allowed_domains=resolve_domains(settings, allowed_domains),
+            )
             view = manager.submit(spec)
-        except QueueFullError as exc:
+        except (QueueFullError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
         return await wait_with_progress(view.task_id, clamp_wait(wait_seconds), ctx)
 
@@ -191,17 +177,4 @@ def create_server(settings: Settings, runner: Runner) -> FastMCP:
         tasks = manager.list(status=status, limit=limit)
         return TaskList(tasks=tasks, total=len(tasks))
 
-    @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
-    async def health(_: Request) -> JSONResponse:
-        """Liveness: the process is up and serving."""
-        return JSONResponse({"status": "ok", "version": __version__, "active_tasks": manager.active_count})
-
-    @mcp.custom_route("/ready", methods=["GET"], include_in_schema=False)
-    async def ready(_: Request) -> JSONResponse:
-        """Readiness: the configured LLM backend is reachable."""
-        ok, detail = await check_llm_ready(settings)
-        return JSONResponse(
-            {"status": "ready" if ok else "not_ready", "llm": detail}, status_code=200 if ok else 503
-        )
-
-    return mcp
+    return mcp, manager

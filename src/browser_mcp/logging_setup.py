@@ -11,7 +11,12 @@ import os
 import sys
 from datetime import UTC, datetime
 
-_STD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime"}
+# uvicorn attaches `color_message` (the message with ANSI codes) to its records; never print it.
+_STD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+    "message",
+    "asctime",
+    "color_message",
+}
 
 
 def prepare_environment() -> None:
