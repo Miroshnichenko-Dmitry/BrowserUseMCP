@@ -67,7 +67,7 @@ class SessionClosedError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class SlotConfig:
-    handover_idle: float = 30
+    handover_idle: float = 60
     busy_wait: float = 20
     max_age: float = 0  # 0 = no limit
     close_timeout: float = 20

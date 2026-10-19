@@ -39,6 +39,8 @@ def main() -> None:
             "the browser. Bind the published port to 127.0.0.1 or set a token.",
             settings.host,
         )
+    if warning := settings.identity_warning():
+        logger.warning(warning)
 
     logger.info(
         "starting server",

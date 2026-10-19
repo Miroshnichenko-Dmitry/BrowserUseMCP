@@ -11,10 +11,20 @@ def make(**env) -> Settings:
 def test_defaults_for_one_agent_at_a_time():
     s = make()
     assert s.browser_headless is True
-    assert s.browser_handover_idle_seconds == 30
+    assert s.browser_handover_idle_seconds == 60
     assert s.browser_busy_wait_seconds == 20
     assert s.browser_session_max_seconds == 1800
     assert s.token_map == {}
+
+
+def test_warns_when_agents_cannot_be_told_apart():
+    agents = f"pix-1:{'a' * 20},pix-2:{'b' * 20}"
+    assert "AUTH_TOKENS is not set" in make().identity_warning()
+    assert (
+        "AUTH_TOKEN is set next to AUTH_TOKENS"
+        in make(auth_tokens=agents, auth_token="s" * 20).identity_warning()
+    )
+    assert make(auth_tokens=agents).identity_warning() is None
 
 
 def test_csv_domains(monkeypatch):

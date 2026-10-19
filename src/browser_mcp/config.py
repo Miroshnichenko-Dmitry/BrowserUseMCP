@@ -78,7 +78,7 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------- one agent at a time
     browser_handover_idle_seconds: float = Field(
-        default=30,
+        default=60,
         ge=0,
         description="A waiting agent takes the browser over once the current agent has been idle this "
         "long. Nobody waiting: the browser stays with the current agent, however long it is idle.",
@@ -147,6 +147,20 @@ class Settings(BaseSettings):
         if self.auth_token is not None:
             tokens[self.auth_token.get_secret_value()] = None
         return tokens
+
+    def identity_warning(self) -> str | None:
+        """Why some agents may be impossible to tell apart (and so share the browser), if so."""
+        if not self.auth_tokens:
+            return (
+                "AUTH_TOKENS is not set: clients without an Mcp-Session-Id (the stateless MCP protocol) "
+                "all count as one agent and share the browser."
+            )
+        if self.auth_token is not None:
+            return (
+                "AUTH_TOKEN is set next to AUTH_TOKENS: stateless clients using the shared AUTH_TOKEN "
+                "all count as one agent and share the browser."
+            )
+        return None
 
     @property
     def window_size(self) -> dict[str, int]:
